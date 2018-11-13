@@ -33,7 +33,7 @@ setup(name='fpdf',
       url='http://code.google.com/p/pyfpdf',
       license='LGPLv3+',
       download_url="https://github.com/reingart/pyfpdf/tarball/%s" % fpdf.__version__,
-      install_requires=['numpy==1.15.4'],
+      install_requires=['numpy>=1.15.4', 'Pillow>=5.3.0'],
       packages=['fpdf', ],
       package_dir={'fpdf': package_dir},
       package_data={'fpdf': ['font/*.ttf', 'font/*.txt']},
@@ -55,4 +55,3 @@ setup(name='fpdf',
       ],
       keywords=["pdf", "unicode", "png", "jpg", "ttf"],
      )
-

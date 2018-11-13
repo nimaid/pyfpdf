@@ -15,17 +15,23 @@
 
 from __future__ import division, with_statement
 
+import errno
+import io
+import math
+import os
+import re
+import struct
+import sys
+import tempfile
+import zlib
 from datetime import datetime
 from functools import wraps
-import math
-import errno
-import os, sys, zlib, struct, re, tempfile, struct
-import io
 
-from .ttfonts import TTFontFile
 from .fonts import fpdf_charwidths
-from .php import substr, sprintf, print_r, UTF8ToUTF16BE, UTF8StringToArray
-from .py3k import PY3K, pickle, urlopen, BytesIO, Image, basestring, unicode, exception, b, hashpath
+from .php import UTF8StringToArray, UTF8ToUTF16BE, print_r, sprintf, substr
+from .py3k import (PY3K, BytesIO, Image, b, basestring, exception, hashpath,
+                   pickle, unicode, urlopen)
+from .ttfonts import TTFontFile
 
 # Global variables
 FPDF_VERSION = '1.7.2'
@@ -1001,32 +1007,8 @@ class FPDF(object):
             type=type.lower()
             if(type=='jpg' or type=='jpeg'):
                 info=self._parsejpg(name)
-            elif(type=='png'):
-                info=self._parsepng(name)
             else:
-                #Allow for additional formats
-                #maybe the image is not showing the correct extension,
-                #but the header is OK,
-                succeed_parsing = False
-                #try all the parsing functions
-                parsing_functions = [self._parsejpg,self._parsepng,self._parsegif]
-                for pf in parsing_functions:
-                    try:
-                        info = pf(name)
-                        succeed_parsing = True
-                        break;
-                    except:
-                        pass
-                #last resource
-                if not succeed_parsing:
-                    mtd='_parse'+type
-                    if not hasattr(self,mtd):
-                        self.error('Unsupported image type: '+type)
-                    info=getattr(self, mtd)(name)
-                mtd='_parse'+type
-                if not hasattr(self,mtd):
-                    self.error('Unsupported image type: '+type)
-                info=getattr(self, mtd)(name)
+                info=self._parseimg(name)
             info['i']=len(self.images)+1
             # is_mask and mask_image
             if is_mask and info['cs'] != 'DeviceGray':
@@ -1820,139 +1802,75 @@ class FPDF(object):
             data = f.read()
         return {'w':width,'h':height,'cs':colspace,'bpc':bpc,'f':'DCTDecode','data':data}
 
-    def _parsegif(self, filename):
-        # Extract info from a GIF file (via PNG conversion)
-        if Image is None:
-            self.error('PIL is required for GIF support')
-        try:
-            im = Image.open(filename)
-        except Exception:
-            self.error('Missing or incorrect image file: %s. error: %s' % (filename, str(exception())))
-        else:
-            # Use temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as \
-                    f:
-                tmp = f.name
-            if "transparency" in im.info:
-                im.save(tmp, transparency = im.info['transparency'])
-            else:
-                im.save(tmp)
-            info = self._parsepng(tmp)
-            os.unlink(tmp)
-        return info
+    def _parseimg(self, filename):
+        import numpy
+        from PIL import Image
 
-    def _parsepng(self, filename):
-        #Extract info from a PNG file
-        f = self.load_resource("image", filename)
-        #Check signature
-        magic = f.read(8).decode("latin1")
-        signature = '\x89'+'PNG'+'\r'+'\n'+'\x1a'+'\n'
-        if not PY3K: signature = signature.decode("latin1")
-        if(magic!=signature):
-            self.error('Not a PNG file: ' + filename)
-        #Read header chunk
-        f.read(4)
-        chunk = f.read(4).decode("latin1")
-        if(chunk!='IHDR'):
-            self.error('Incorrect PNG file: ' + filename)
-        w=self._freadint(f)
-        h=self._freadint(f)
-        bpc=ord(f.read(1))
-        if(bpc>8):
-            self.error('16-bit depth not supported: ' + filename)
-        ct=ord(f.read(1))
-        if(ct==0 or ct==4):
-            colspace='DeviceGray'
-        elif(ct==2 or ct==6):
-            colspace='DeviceRGB'
-        elif(ct==3):
-            colspace='Indexed'
-        else:
-            self.error('Unknown color type: ' + filename)
-        if(ord(f.read(1))!=0):
-            self.error('Unknown compression method: ' + filename)
-        if(ord(f.read(1))!=0):
-            self.error('Unknown filter method: ' + filename)
-        if(ord(f.read(1))!=0):
-            self.error('Interlacing not supported: ' + filename)
-        f.read(4)
-        dp='/Predictor 15 /Colors '
-        if colspace == 'DeviceRGB':
-            dp+='3'
-        else:
-            dp+='1'
-        dp+=' /BitsPerComponent '+str(bpc)+' /Columns '+str(w)+''
-        #Scan chunks looking for palette, transparency and image data
+        img = Image.open(filename)
+        if img.mode not in ['L', 'LA', 'RGBA']:
+            img = img.convert('RGBA')
+        w, h = img.size
+        info = {
+            'w': w,
+            'h': h,
+        }
         pal=''
         trns=''
-        data=bytes() if PY3K else str()
-        n=1
-        while n != None:
-            n=self._freadint(f)
-            type=f.read(4).decode("latin1")
-            if(type=='PLTE'):
-                #Read palette
-                pal=f.read(n)
-                f.read(4)
-            elif(type=='tRNS'):
-                #Read transparency info
-                t=f.read(n)
-                if(ct==0):
-                    trns=[ord(substr(t,1,1)),]
-                elif(ct==2):
-                    trns=[ord(substr(t,1,1)),ord(substr(t,3,1)),ord(substr(t,5,1))]
-                else:
-                    pos=t.find('\x00'.encode("latin1"))
-                    if(pos!=-1):
-                        trns=[pos,]
-                f.read(4)
-            elif(type=='IDAT'):
-                #Read image data block
-                data+=f.read(n)
-                f.read(4)
-            elif(type=='IEND'):
-                break
-            else:
-                f.read(n+4)
-        if(colspace=='Indexed' and not pal):
-            self.error('Missing palette in ' + filename)
-        f.close()
-        info = {'w':w,'h':h,'cs':colspace,'bpc':bpc,'f':'FlateDecode','dp':dp,'pal':pal,'trns':trns,}
-        if(ct>=4):
-            # Extract alpha channel
-            data = zlib.decompress(data)
-            color = io.BytesIO()
-            alpha = io.BytesIO()
-            if(ct==4):
-                # Gray image
-                length = 2*w
-                for i in range(h):
-                    pos = (1+length)*i
-                    l = b(data[pos])
-                    color.write(l)
-                    alpha.write(l)
-                    line = data[pos+1:pos+1+length]
-                    color.write(line[::2])
-                    alpha.write(line[1::2])
-            else:
-                # RGB image
-                import numpy
-                data = numpy.frombuffer(data, dtype=numpy.uint8)
-                length = 4*w
-                for i in range(h):
-                    pos = (1+length)*i
-                    l = data[pos]
-                    color.write(l)
-                    alpha.write(l)
-                    line = data[pos+1:pos+1+length]
-                    alpha.write(line[3::4].tobytes())
-                    color.write(numpy.delete(line, numpy.arange(3, line.size, 4)))
-            del data
-            data = zlib.compress(color.getvalue())
-            info['smask'] = zlib.compress(alpha.getvalue())
-            if (self.pdf_version < '1.4'):
-                self.pdf_version = '1.4'
-        info['data'] = data
+        if img.mode == 'L':
+            dpn = 1
+            bpc = 8
+            colspace = 'DeviceGray'
+            data = numpy.asarray(img)
+            z_data = numpy.insert(data, 0, 0, axis=1)
+            info['data']= zlib.compress(z_data)
+        elif img.mode == 'LA':
+            dpn = 1
+            bpc = 8
+            colspace = 'DeviceGray'
+
+            rgba_data = numpy.reshape(numpy.asarray(img), w * h * 2)
+            a_data = numpy.ascontiguousarray(rgba_data[1::2])
+            rgb_data = numpy.ascontiguousarray(rgba_data[0::2])
+
+            a_data = numpy.reshape(a_data, (h, w))
+            rgb_data = numpy.reshape(rgb_data, (h, w))
+
+            za_data = numpy.insert(a_data.reshape((h, w)), 0, 0, axis=1)
+            zrgb_data = numpy.insert(rgb_data.reshape((h, w)), 0, 0, axis=1)
+            info['data']= zlib.compress(zrgb_data)
+            info['smask'] = zlib.compress(za_data)
+        elif img.mode == 'RGBA':
+            dpn = 3
+            bpc = 8
+            colspace = 'DeviceRGB'
+
+            rgba_data = numpy.reshape(numpy.asarray(img), w * h * 4)
+            a_data = numpy.ascontiguousarray(rgba_data[3::4])
+            rgb_data = numpy.delete(rgba_data, numpy.arange(3, len(rgba_data), 4))
+
+            a_data = numpy.reshape(a_data, (h, w))
+            rgb_data = numpy.reshape(rgb_data, (h, w * 3))
+
+
+            za_data = numpy.insert(a_data.reshape((h, w)), 0, 0, axis=1)
+            zrgb_data = numpy.insert(rgb_data.reshape((h, w*3)), 0, 0, axis=1)
+            info['data']= zlib.compress(zrgb_data)
+            info['smask'] = zlib.compress(za_data)
+        else:
+            self.error('Unsupport image: {}'.format(img.mode))
+
+        dp='/Predictor 15 /Colors ' + str(dpn) + ' /BitsPerComponent '+str(bpc)+' /Columns '+str(w)+''
+
+        info.update({
+            'cs':colspace,
+            'bpc':bpc,
+            'f':'FlateDecode',
+            'dp': dp,
+            'pal':pal,
+            'trns':trns,
+        })
+        if (self.pdf_version < '1.4'):
+            self.pdf_version = '1.4'
         return info
 
     def _freadint(self, f):
