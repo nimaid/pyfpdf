@@ -26,6 +26,10 @@ from .fonts import fpdf_charwidths
 from .php import substr, sprintf, print_r, UTF8ToUTF16BE, UTF8StringToArray
 from .py3k import PY3K, pickle, urlopen, BytesIO, Image, basestring, unicode, exception, b, hashpath
 
+import locale
+import numpy
+from PIL import Image as PIL_Image
+
 # Global variables
 FPDF_VERSION = '1.7.2'
 FPDF_FONT_DIR = os.path.join(os.path.dirname(__file__),'font')
@@ -990,9 +994,9 @@ class FPDF(object):
     @check_page
     def image(self, name, x=None, y=None, w=0,h=0,type='',link='', is_mask=False, mask_image=None):
         "Put an image on the page"
-        from PIL.Image import Image
+        #from PIL.Image import Image
 
-        is_pil = isinstance(name, Image)
+        is_pil = isinstance(name, PIL_Image)
         if is_pil:
             image_key = id(name)
         else:
@@ -1139,7 +1143,6 @@ class FPDF(object):
 #            self.error("Don\'t alter the locale before including class file");
         #Check for decimal separator
         if(sprintf('%.1f',1.0)!='1.0'):
-            import locale
             locale.setlocale(locale.LC_NUMERIC,'C')
 
     def _getfontpath(self):
@@ -1805,15 +1808,10 @@ class FPDF(object):
         return {'w':width,'h':height,'cs':colspace,'bpc':bpc,'f':'DCTDecode','data':data}
 
     def _parseimg(self, filename):
-        import numpy
-        from PIL import Image
-
-        img = Image.open(filename)
+        img = PIL_Image.open(filename)
         return self._parsepil(img)
 
     def _parsepil(self, img):
-        import numpy
-
         if img.mode not in ['L', 'LA', 'RGBA']:
             img = img.convert('RGBA')
         w, h = img.size
