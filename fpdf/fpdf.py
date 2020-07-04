@@ -996,7 +996,7 @@ class FPDF(object):
         "Put an image on the page"
         #from PIL.Image import Image
 
-        is_pil = isinstance(name, PIL_Image)
+        is_pil = isinstance(name, PIL_Image.Image)
         if is_pil:
             image_key = id(name)
         else:
